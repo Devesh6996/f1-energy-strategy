@@ -362,3 +362,26 @@ Results after the conditions + safety-car fixes (21 rounds):
 - Round 6 (Monaco) stays a race-pace outlier for Red Bull (+0.29% while neighbours are ~ -1%). Monaco
   races are mostly trains behind slower cars - a dirty-air problem, handled in the next step.
 - The panel now keeps a race when qualifying was wet (Sao Paulo race pace is used, quali pace isn't).
+
+### Dirty air in race pace
+- Step 2e now also saves the gap to the car physically ahead (any car, lapped ones included) when each
+  lap starts and ends, from the line-crossing times. In-laps (car in the pit lane) don't count.
+- Race pace now includes two dirty-air terms: within 1 s and 1-2 s of the car ahead (clean air = more than
+  2 s). So a team stuck in a train (e.g. Monaco) is no longer counted as slow.
+- The per-race dirty-air cost is printed and saved in `race_pace_fuel_fits.csv`. In 2026 a car within 1 s
+  also gets overtake mode (extra electrical energy), so the number is the NET effect.
+- Check on synthetic races with a built-in cost of 0.6 s (within 1 s) and 0.2 s (1-2 s): estimated
+  0.46 s and 0.22 s; the Red Bull step was recovered as -0.41% (true -0.40%).
+- Caveat: who ends up close behind is not random (a faster car catches up), so the dirty-air cost is an
+  association, partly controlled by the team effects.
+
+Dirty-air findings (21 races):
+- Running within 1 s of the car ahead costs a median +0.33 s/lap vs clean air; 1-2 s behind costs +0.11 s.
+- Biggest costs on slow, twisty tracks: Monaco +0.76, Singapore +0.73, Madrid +0.68, Austin +0.62,
+  Hungary +0.58 s/lap.
+- No cost, or even a gain, on long-straight tracks: Monza -0.06, Las Vegas -0.01 (-0.28 at 1-2 s),
+  Baku 0.00, Montreal -0.02. There, the tow plus 2026 overtake mode cancels the aero loss in corners.
+- Miami package, race pace: -0.88% (t -7.6, no placebo as big), down from -0.98%. Part of Red Bull's
+  apparent race-pace gain was clean air from running at the front - the upgrade effect is still clear.
+- Monaco stays an outlier for Red Bull (+0.42%): not explained by dirty air. One race; Monaco race pace
+  is shaped by deliberate pace management and is the least reliable race of the season.

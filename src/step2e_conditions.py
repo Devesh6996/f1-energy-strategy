@@ -112,7 +112,50 @@ def lap_conditions(session):
         "track_status": laps["TrackStatus"].astype(str).to_numpy() if "TrackStatus" in laps else "",
     }).dropna(subset=["lap_number"]).astype({"lap_number": int})
     out["rho_humid"] = np.round(humid_air_density(out["pressure_hpa"], out["air_temp"], out["humidity_%"]), 4)
+    gaps = gaps_to_car_ahead(laps)
+    if gaps is not None:
+        out = out.merge(gaps, on=["driver", "lap_number"], how="left")
     return out
+
+
+GAP_CAP_S = 10.0     # gaps above this count as clean air
+
+
+def gaps_to_car_ahead(laps):
+    """Gap (s) to the car physically ahead on the road when crossing the line at the start and end of each lap.
+
+    Every lap ends with a line crossing at session time 'Time'. For each crossing, the car ahead is the
+    last OTHER car to cross the line before it - on any lap, so backmarkers being lapped count too
+    (their dirty air is just as real). Cars in the pit lane are left out (their crossing isn't on track).
+    """
+    if "Time" not in laps:
+        return None
+    t = laps["Time"].dt.total_seconds().to_numpy(float)
+    drv = laps["Driver"].to_numpy()
+    # an in-lap ends in the pit lane, so that crossing isn't on track
+    in_pit = laps["PitInTime"].notna().to_numpy() if "PitInTime" in laps else np.zeros(len(laps), bool)
+    ok = np.isfinite(t) & ~in_pit
+    order = np.argsort(t[ok])
+    ct, cd = t[ok][order], drv[ok][order]
+
+    def gap(at, who):
+        g = np.full(len(at), np.nan)
+        idx = np.searchsorted(ct, at, side="left") - 1
+        for i, (j, a, d) in enumerate(zip(idx, at, who)):
+            if not np.isfinite(a):
+                continue
+            while j >= 0 and cd[j] == d:
+                j -= 1
+            if j >= 0:
+                g[i] = min(a - ct[j], GAP_CAP_S)
+        return g
+
+    start = laps["LapStartTime"].dt.total_seconds().to_numpy(float)
+    return pd.DataFrame({
+        "driver": drv, "lap_number": laps["LapNumber"].to_numpy(),
+        "gap_ahead_start_s": np.round(gap(start, drv), 3),
+        "gap_ahead_end_s": np.round(gap(t, drv), 3),
+    }).dropna(subset=["lap_number"]).astype({"lap_number": int})
 
 
 def collect(year, rounds=None, refresh=False):

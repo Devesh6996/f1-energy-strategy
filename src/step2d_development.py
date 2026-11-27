@@ -126,6 +126,8 @@ def conditions(kind):
     return pd.concat([pd.read_csv(f).assign(round=int(f.name[:2])) for f in files], ignore_index=True)
 
 
+GAP_BANDS = [0.0, 1.0, 2.0, 1e9]   # seconds behind the car ahead; the last band (> 2 s) is "clean air"
+GAP_NAMES = ["within_1s", "within_1_2s"]
 NEUTRAL = ("4", "5", "6", "7")    # track status codes: safety car, red flag, VSC, VSC ending
 RESTART_LAPS = 2                  # green laps right after a neutralisation that are dropped
 SC_FUEL_SHARE = 0.5               # fuel burned on a neutralised lap, relative to a green lap (rough)
@@ -145,6 +147,7 @@ def race_pace(verbose=False):
     laps slower than 107%):
         lap_time = race constant + fuel effect * fuel_kg
                    + compound offset + compound-specific degradation * tyre_life
+                   + dirty air (within 1 s / 1-2 s of the car ahead, if Step 2e has the gaps)
                    + team effect
     Fuel and tyre age can be separated because teams pit at different laps. If the fuel effect comes
     out implausible, a standard value is used instead. The team effect is converted to % of the
@@ -184,6 +187,9 @@ def race_pace(verbose=False):
             r = r[r["rain"].ne(True)].drop(columns="rain")
             if verbose and n_rain:
                 print(f"  round {int(r['round'].iloc[0]) if len(r) else '?'}: dropped {n_rain} race laps driven in rain")
+            if "gap_ahead_start_s" in rcond:
+                r = r.merge(rcond[["round", "driver", "lap_number", "gap_ahead_start_s", "gap_ahead_end_s"]],
+                            on=["round", "driver", "lap_number"], how="left")
         r = r[r["compound"].astype(str).str.upper().isin(DRY)].dropna(subset=["lap_time_s", "tyre_life", "fuel_kg"])
         counts = r.groupby("team")["lap_time_s"].transform("size")
         r = r[counts >= MIN_TEAM_LAPS]
@@ -204,6 +210,12 @@ def race_pace(verbose=False):
             if c != comps[0]:
                 cols[f"is_{c}"] = on
             cols[f"deg_{c}"] = on * r["tyre_life"].to_numpy(float)
+        has_gap = "gap_ahead_start_s" in r and r["gap_ahead_start_s"].notna().mean() > 0.5
+        if has_gap:
+            # dirty air: average gap to the car ahead over the lap (start and end of the lap)
+            gap = r[["gap_ahead_start_s", "gap_ahead_end_s"]].mean(axis=1).fillna(GAP_BANDS[-1]).to_numpy()
+            for (a, b), name in zip(zip(GAP_BANDS[:-1], GAP_BANDS[1:]), GAP_NAMES):
+                cols[name] = ((gap >= a) & (gap < b)).astype(float)
         for t in teams[1:]:
             cols[f"team_{t}"] = (r["team"] == t).to_numpy(float)
         X = np.column_stack(list(cols.values()))
@@ -218,8 +230,13 @@ def race_pace(verbose=False):
             keep = [i for i, n in enumerate(names) if n != "fuel"]
             beta2, *_ = np.linalg.lstsq(X[:, keep], y - fuel * cols["fuel"], rcond=None)
             beta = np.insert(beta2, names.index("fuel"), fuel)
-        fuel_log.append({"round": rnd, "fuel_s_per_kg": round(float(fuel), 4), "fixed": fixed,
-                         "laps": len(r), "median_lap_s": round(med_lap, 2)})
+        entry = {"round": rnd, "fuel_s_per_kg": round(float(fuel), 4), "fixed": fixed,
+                 "laps": len(r), "median_lap_s": round(med_lap, 2)}
+        if has_gap:
+            for name in GAP_NAMES:
+                entry[f"{name}_s"] = round(float(beta[names.index(name)]), 3)
+                entry[f"{name}_laps"] = int(cols[name].sum())
+        fuel_log.append(entry)
         eff = {teams[0]: 0.0}
         eff.update({t: beta[names.index(f"team_{t}")] for t in teams[1:]})
         eff = pd.Series(eff)
@@ -232,6 +249,16 @@ def race_pace(verbose=False):
               f"standard value used in {int(fl['fixed'].sum())} races")
         DEV_DIR.mkdir(parents=True, exist_ok=True)
         fl.to_csv(DEV_DIR / "race_pace_fuel_fits.csv", index=False)
+        if f"{GAP_NAMES[0]}_s" in fl:
+            print("Dirty air - lap time lost vs clean air (more than 2 s behind), per race:")
+            show = fl[["round"] + [c for n in GAP_NAMES for c in (f"{n}_s", f"{n}_laps")]]
+            print(show.to_string(index=False))
+            for n in GAP_NAMES:
+                v = fl[f"{n}_s"].dropna()
+                print(f"  {n}: median {v.median():+.3f} s/lap over {len(v)} races "
+                      f"({(v > 0).mean():.0%} of races slower than clean air)")
+            print("  Note: in 2026 a car within 1 s also gets overtake mode (extra electrical energy), so this is"
+                  " the NET effect: aero loss in corners minus the extra boost on the straights.")
     return pd.DataFrame(rows, columns=["round", "team", "race_pace_%"])
 
 
