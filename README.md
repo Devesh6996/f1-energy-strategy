@@ -414,3 +414,64 @@ Track-evolution findings (20 dry qualifying sessions):
 - Miami package, qualifying pace: -0.53% corrected (t -6.6, no placebo as big) vs -0.68% uncorrected.
   About a fifth of Red Bull's apparent qualifying gain came from reaching later sessions on a faster
   track; the rest is the car. Race pace (no track-evolution issue) stays -0.88%.
+
+
+## Step 2f - Tyre degradation by the actual Pirelli compound (C1-C5)
+Pirelli brings three of its five 2026 compounds to each race and labels them hard/medium/soft there, so
+"SOFT" can be C3 (Suzuka, Silverstone) or C5 (Monaco, Miami...). `reference/pirelli_compounds_2026.csv`
+holds the real allocation per event (from Pirelli / formula1.com announcements; C6 was dropped for 2026).
+
+    python src\step2f_tyres.py
+
+- Race laps cleaned as in Step 2d (no rain, no restart laps, fuel rebuilt after SC), clean air only
+  (> 1.5 s behind), fuel-corrected with the per-race fuel effect from Step 2d.
+- Degradation = slope of corrected lap time vs tyre age for every stint of 8+ laps.
+- Compounds are compared WITHIN the same race (event effects): hard compounds go to severe tracks, so
+  raw averages would mix the compound with the track.
+- Check on synthetic races (true extra degradation vs C3: C1 -0.030, C2 -0.015, C4 +0.020, C5 +0.045 s/lap):
+  recovered -0.029, -0.014, +0.020, +0.044.
+- Within a stint, fuel and tyre age change together, so the fuel effect must come from outside the stint
+  (Step 2d's race fits). An error of 0.005 s/kg shifts every slope by ~0.005 s/lap - but equally for all
+  compounds at the same race, so the compound comparison is unaffected.
+
+Step 2f findings (21 races, 580 clean-air stints):
+- Labels hide the rubber: "HARD" stints were C1 (31), C2 (120) and C3 (96); "SOFT" stints were mostly C5
+  (102) and C4 (37).
+- Within the same race, the softer compounds did NOT degrade faster than C3: C4 -0.005 s/lap (t -1.1),
+  C5 -0.016 (t -2.7); harder C2 degraded less (-0.035, t -3.8) as expected. Possible reasons: soft stints
+  that wore out fast got pitted early and fell below the 8-lap minimum (survivor effect - checked with the
+  "kept share" table and `--max-age 12 --min-laps 6`), drivers managing softs harder, or harder compounds
+  struggling to work on low-energy tracks.
+- Heat: every compound degrades faster on hotter tracks, more so the softer ones (C3 +0.005, C4 +0.019,
+  C5 +0.028 % of a lap per lap per +10 C).
+- Energy vs tyre age by compound: 2 of 12 tests reach |t| > 2, about what chance gives with 12 tests -
+  no reliable compound difference.
+
+### Tyre rules that matter for the analysis
+- Dry race: at least two different slick compounds must be used, so at least one pit stop. (Monaco's
+  2025 two-stop rule was dropped for 2026.) Every race therefore has 2+ stints per driver.
+- Sets are limited per weekend (e.g. Monaco: 8 soft, 3 medium, 2 hard, plus one extra soft for Q3), so
+  teams sometimes qualify or start the race on a USED set.
+- Handling: Step 2e now saves each lap's tyre age (FastF1 counts laps from earlier sessions too) and
+  whether the set was new. Quali pace uses only new-tyre laps whenever the team has any at that round;
+  the number of team best laps set on used tyres is printed. In the race, tyre age already includes the
+  laps from earlier sessions, so a stint started on a used set is handled by the degradation model.
+
+Used-tyre check (Step 2d): only 4 of 220 team best quali laps were on a used set; 320 used-tyre quali laps
+dropped. Miami package quali pace -0.49% (t -6.3, no placebo as big). Red Bull's lift-and-coast after
+Miami: -1.68% of the lap (t -4.8, placebo share 0.1, survives team trends) - they needed to lift less.
+
+Updating files: `update_from_downloads.ps1` copies the NEWEST downloaded version of each project file
+(browsers rename repeat downloads "file (1).py", and a wildcard copy can pick an older one):
+    powershell -ExecutionPolicy Bypass -File .\update_from_downloads.ps1
+
+Step 2f robustness (selection check + same tyre-age window):
+- Kept share (stints long enough to measure): C1-C3 72-76%, C4/C5 61-62%. Softer stints are dropped a
+  bit more often, so a mild survivor effect exists - but median stint lengths are similar (18-23 laps).
+- Same window (tyre ages 1-12, stints of 6+ laps): C4 -0.015 (t -1.1) and C5 -0.017 (t -0.9) vs C3;
+  C2 -0.049 (t -4.0). So the result holds: compounds HARDER than C3 wear less, compounds SOFTER than C3
+  do not wear more than C3 at the same race. C3 itself is the outlier, worth checking by its role.
+- Heat: every compound degrades faster when hotter, but the ORDER between compounds changes between the
+  two runs - so "heat hurts softs most" is not robust.
+- Energy: C5 shows less growth in lift-and-coast with tyre age than C3 in both runs (t -3.1, -2.6) -
+  a weak but repeated signal. C1 results rest on 1-2 races.

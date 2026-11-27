@@ -108,6 +108,10 @@ def lap_conditions(session):
         "track_temp": at("TrackTemp"),
         "pressure_hpa": at("Pressure"),
         "deleted": laps["Deleted"].fillna(False).astype(bool).to_numpy() if "Deleted" in laps else False,
+        # tyre state: laps already on the set (FastF1 counts laps from earlier sessions too) and
+        # whether the set was new when fitted - a used soft in qualifying is slower than a new one
+        "tyre_life": laps["TyreLife"].to_numpy(dtype=float) if "TyreLife" in laps else np.nan,
+        "fresh_tyre": laps["FreshTyre"].to_numpy() if "FreshTyre" in laps else np.nan,
         # track status during the lap: 1 green, 2 yellow, 4 safety car, 5 red flag, 6 VSC, 7 VSC ending
         "track_status": laps["TrackStatus"].astype(str).to_numpy() if "TrackStatus" in laps else "",
     }).dropna(subset=["lap_number"]).astype({"lap_number": int})

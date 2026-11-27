@@ -78,7 +78,8 @@ def load_panel():
     # Step 2e conditions (if saved): drop wet laps, and drag from wet qualifying sessions
     cond = conditions("Q")
     if not cond.empty:
-        keep = ["round", "driver", "lap_number", "wet"] + [c for c in ("deleted", "session_time_s") if c in cond]
+        keep = ["round", "driver", "lap_number", "wet"] + [c for c in ("deleted", "session_time_s", "fresh_tyre")
+                                                            if c in cond]
         q = q.merge(cond[keep], on=["round", "driver", "lap_number"], how="left")
         share = q.groupby("round")["wet"].mean()
         wet_rounds = sorted(share[share > 0.3].index)
@@ -90,6 +91,20 @@ def load_panel():
         drag = drag[~drag["round"].isin(wet_rounds)]
         print(f"Conditions (Step 2e): dropped {n_wet} wet and {n_del} deleted quali laps; "
               f"drag ignored for wet qualifying in rounds {wet_rounds if wet_rounds else 'none'}")
+
+    # Used tyres: sets are limited (13 dry sets per weekend), so some qualifying runs - often Q1 runs of
+    # teams saving new softs - are on a used set, which is slower. Use only new-tyre laps for a team
+    # whenever it has any at that round.
+    if "fresh_tyre" in q and q["fresh_tyre"].notna().mean() > 0.5:
+        fresh = q["fresh_tyre"].astype(str).str.lower().isin(["true", "1", "1.0"])
+        best_idx = q.groupby(["round", "team"])["lap_time_s"].idxmin()
+        used_best = int((~fresh.loc[best_idx]).sum())
+        has_fresh = fresh.groupby([q["round"], q["team"]]).transform("any")
+        n0 = len(q)
+        q = q[fresh | ~has_fresh]
+        print(f"Tyres: {used_best} of {len(best_idx)} team best laps were on a USED set; dropped {n0 - len(q)} "
+              "used-tyre quali laps where the team also had new-tyre laps")
+    q = q.drop(columns=[c for c in ("fresh_tyre",) if c in q])
 
     # Track evolution: the track gets faster during qualifying (rubber, temperature), so a team knocked
     # out in Q1 set its best lap on a slower track than a team in Q3. Correct every lap to the
@@ -186,6 +201,43 @@ def neutral_lap_numbers(rc_round):
     return set(int(l) for l in share[share >= 0.25].index)
 
 
+def clean_race_laps(r, rcond, verbose=False):
+    """Race laps of one round, cleaned with the Step 2e conditions:
+    restart laps after SC/VSC/red dropped, fuel load rebuilt lap by lap, rain laps dropped,
+    gap to the car ahead added. Without Step 2e data the laps are returned unchanged."""
+    if not rcond.empty and "track_status" in rcond:
+        # Step 2c already dropped the neutralised laps themselves. Two effects remain:
+        #  1) restart laps: cold tyres, cars bunched up, and a battery recharged to full under SC
+        #  2) fuel: cars burn much less under SC/VSC, so later laps carry more fuel than a straight
+        #     line from 70 kg would say -> rebuild the fuel load lap by lap
+        g = rcond[rcond["round"] == r["round"].iloc[0]]
+        neutral = neutral_lap_numbers(g)
+        if neutral:
+            total = int(g["lap_number"].max())
+            w = np.array([SC_FUEL_SHARE if l in neutral else 1.0 for l in range(1, total + 1)])
+            burned = np.concatenate([[0.0], np.cumsum(w)])          # fuel units burned before lap n
+            fuel = 70 - 68 * burned[np.clip(r["lap_number"].to_numpy(int) - 1, 0, total)] / w.sum()
+            r["fuel_kg"] = np.round(fuel, 1)
+            last = np.full(len(r), -10**6)
+            for l in sorted(neutral):
+                last = np.where(r["lap_number"].to_numpy() > l, l, last)
+            restart = (r["lap_number"].to_numpy() - last) <= RESTART_LAPS
+            if verbose:
+                print(f"  round {int(r['round'].iloc[0])}: {len(neutral)} SC/VSC/red laps -> fuel rebuilt, "
+                      f"{int(restart.sum())} restart laps dropped")
+            r = r[~restart]
+    if not rcond.empty:      # drop laps driven in rain (dry tyres on a damp track are not race pace)
+        r = r.merge(rcond[["round", "driver", "lap_number", "rain"]], on=["round", "driver", "lap_number"], how="left")
+        n_rain = int(r["rain"].eq(True).sum())
+        r = r[r["rain"].ne(True)].drop(columns="rain")
+        if verbose and n_rain:
+            print(f"  round {int(r['round'].iloc[0]) if len(r) else '?'}: dropped {n_rain} race laps driven in rain")
+        if "gap_ahead_start_s" in rcond:
+            r = r.merge(rcond[["round", "driver", "lap_number", "gap_ahead_start_s", "gap_ahead_end_s"]],
+                        on=["round", "driver", "lap_number"], how="left")
+    return r
+
+
 def race_pace(verbose=False):
     """Race pace per team and race, corrected for fuel load and tyre age.
 
@@ -206,36 +258,9 @@ def race_pace(verbose=False):
         r = pd.read_csv(f)
         if r.empty or "tyre_life" not in r:
             continue
-        if not rcond.empty and "track_status" in rcond:
-            # Step 2c already dropped the neutralised laps themselves. Two effects remain:
-            #  1) restart laps: cold tyres, cars bunched up, and a battery recharged to full under SC
-            #  2) fuel: cars burn much less under SC/VSC, so later laps carry more fuel than a straight
-            #     line from 70 kg would say -> rebuild the fuel load lap by lap
-            g = rcond[rcond["round"] == r["round"].iloc[0]]
-            neutral = neutral_lap_numbers(g)
-            if neutral:
-                total = int(g["lap_number"].max())
-                w = np.array([SC_FUEL_SHARE if l in neutral else 1.0 for l in range(1, total + 1)])
-                burned = np.concatenate([[0.0], np.cumsum(w)])          # fuel units burned before lap n
-                fuel = 70 - 68 * burned[np.clip(r["lap_number"].to_numpy(int) - 1, 0, total)] / w.sum()
-                r["fuel_kg"] = np.round(fuel, 1)
-                last = np.full(len(r), -10**6)
-                for l in sorted(neutral):
-                    last = np.where(r["lap_number"].to_numpy() > l, l, last)
-                restart = (r["lap_number"].to_numpy() - last) <= RESTART_LAPS
-                if verbose:
-                    print(f"  round {int(r['round'].iloc[0])}: {len(neutral)} SC/VSC/red laps -> fuel rebuilt, "
-                          f"{int(restart.sum())} restart laps dropped")
-                r = r[~restart]
-        if not rcond.empty:      # drop laps driven in rain (dry tyres on a damp track are not race pace)
-            r = r.merge(rcond[["round", "driver", "lap_number", "rain"]], on=["round", "driver", "lap_number"], how="left")
-            n_rain = int(r["rain"].eq(True).sum())
-            r = r[r["rain"].ne(True)].drop(columns="rain")
-            if verbose and n_rain:
-                print(f"  round {int(r['round'].iloc[0]) if len(r) else '?'}: dropped {n_rain} race laps driven in rain")
-            if "gap_ahead_start_s" in rcond:
-                r = r.merge(rcond[["round", "driver", "lap_number", "gap_ahead_start_s", "gap_ahead_end_s"]],
-                            on=["round", "driver", "lap_number"], how="left")
+        r = clean_race_laps(r, rcond, verbose)
+        if r.empty:
+            continue
         r = r[r["compound"].astype(str).str.upper().isin(DRY)].dropna(subset=["lap_time_s", "tyre_life", "fuel_kg"])
         counts = r.groupby("team")["lap_time_s"].transform("size")
         r = r[counts >= MIN_TEAM_LAPS]
