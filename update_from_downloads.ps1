@@ -12,7 +12,8 @@ $project = $PSScriptRoot
 $rules = @(
     @{ Pattern = '^step.*';                  Ext = '.py';  Dest = 'src' },
     @{ Pattern = '^(README|SETUP)$';         Ext = '.md';  Dest = '.' },
-    @{ Pattern = '^pirelli_compounds_2026$'; Ext = '.csv'; Dest = 'reference' },
+    @{ Pattern = '^requirements$';           Ext = '.txt'; Dest = '.' },
+    @{ Pattern = '^(pirelli_compounds_2026|fia_pu_urls)$'; Ext = '.csv'; Dest = 'reference' },
     @{ Pattern = '^update_from_downloads$';  Ext = '.ps1'; Dest = '.' }
 )
 

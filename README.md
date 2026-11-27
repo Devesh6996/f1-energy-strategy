@@ -475,3 +475,40 @@ Step 2f robustness (selection check + same tyre-age window):
   two runs - so "heat hurts softs most" is not robust.
 - Energy: C5 shows less growth in lift-and-coast with tyre age than C3 in both runs (t -3.1, -2.6) -
   a weak but repeated signal. C1 results rest on 1-2 races.
+
+
+## Step 2g - Power-unit element age (new engines, batteries)
+Drivers may only use a limited number of each PU element per season, so teams bring new ones a few times
+a year. The FIA publishes "PU Elements used per Driver up to now" at every event (ICE, TC, EXH, MGU-K, ES,
+PU-CE, PU-ANC). `src/step2g_pu_elements.py` downloads them to `data/fia_pu/`, parses them, and works out
+when each driver started using a new element: count in the next event's document minus this one (the
+document is published before running starts, so it doesn't yet count that weekend's new parts - checked
+against the Las Vegas "New PU elements for this Competition" document).
+
+    pip install pdfplumber requests
+    python src\step2g_pu_elements.py --cache-dir C:\f1cache
+
+- Test: teammates at the same event (same car, track, weather), with driver-pair effects; outcomes are
+  effective drag, quali lap time and electrical energy per lap. A real new-engine effect should show as
+  LESS effective drag and a FASTER lap together.
+- Check on synthetic documents (new ICE built in as -0.05 CdA and -0.15% lap time): recovered -0.050 and
+  -0.14%.
+- Limits: teams rotate a pool of units, so "new at this event" = first used here; ages are approximate.
+  If a document has an unusual name, add `round,url` to `reference/fia_pu_urls.csv`. Known differences
+  are tried automatically (Barcelona = "barcelona-catalunya_grand_prix"); a missing round-1 document
+  means zero elements used so far. Tests with fewer than 30 informative teammate pairs from 6+ teams are
+  skipped (first run gave meaningless t-values like -137 from 9 pairs).
+- 2026 allowance per car before penalties: 4 ICE, 4 TC, 4 EX, 3 MGU-K, 3 ES, 3 CE, 6 PU-ANC.
+
+Step 2g findings (22 FIA documents, rounds 1-21 testable; teammates at the same event):
+- New ICE: effective drag -0.037 (t -1.0), quali lap -0.15% (t -1.2). Right direction (more power looks
+  like less drag AND a faster lap) but not clear. 95% interval for the lap effect about -0.39% to +0.09%:
+  a new engine is worth less than ~0.4% of a lap - no hidden big "fresh engine" effect.
+- New energy store (battery): +0.25 MJ more electrical energy per quali lap (t 3.5; passes even a
+  Bonferroni correction for the 15 tests, |t| > 2.9). Lap time -0.05% (t -1.0, not clear). Cross-check
+  with Step 3: 0.25 MJ x 0.14-0.37 s per MJ = 0.035-0.09 s, ~0.04-0.1% of a lap - the same size as the
+  (unclear) lap effect, so the two results agree.
+- Battery age itself shows no gradual loss (+0.004 MJ per event, t 0.4). So the jump at a new battery may
+  partly be selection: teams replace a battery when the old one has a problem.
+- Element usage: Aston Martin (Honda) used the most batteries and control electronics (Stroll 9 ES vs an
+  allowance of 3); Red Bull/RB-Ford teams the most combustion engines.
