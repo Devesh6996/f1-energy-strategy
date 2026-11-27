@@ -340,8 +340,8 @@ Findings (21 rounds):
 - Humidity correlates with drag across tracks (r = +0.72), but humid air only lowers density by
   0.2-1.2%, far too little to explain the differences. Humid tracks are Sao Paulo (wet) and slow street
   circuits like Singapore - so it is the track type, not the humidity.
-- The other outliers (Monaco 2.14, Singapore 1.67) are dry: slow street circuits where few laps reach
-  the speeds the drag fit uses, plus genuinely high-downforce wings. A fit-regime issue, not weather.
+- The other outliers (Monaco 2.14, Singapore 1.67) are dry. Monaco turned out to be a modelling error:
+  the FIA's special Monaco MGU-K map (see below) - with it, Monaco's drag is 1.20, close to the median.
 - Wind: within a session it differs by at most 0.5 m/s between drivers' laps, worth ~0.01-0.04 CdA -
   negligible for team comparisons.
 
@@ -385,3 +385,32 @@ Dirty-air findings (21 races):
   apparent race-pace gain was clean air from running at the front - the upgrade effect is still clear.
 - Monaco stays an outlier for Red Bull (+0.42%): not explained by dirty air. One race; Monaco race pace
   is shaped by deliberate pace management and is the least reliable race of the season.
+
+### Event-specific MGU-K map: Monaco "Rev 1"
+At Monaco the FIA mandated a different MGU-K map: full 350 kW only up to 200 km/h, then a linear taper
+to zero at 300 km/h (standard map: full power to ~290 km/h). Straight-line aero mode was also not
+allowed. The drag fit assumed the standard map, so at Monaco it credited the cars with ~300 kW more
+power at top speed than they had - and read the missing speed as drag (CdA 2.14, the biggest dry outlier).
+`step2_power_model.py` now has `EVENT_MAPS` / `set_deployment_map()`, and Step 2c picks the map from the
+event name. Re-run Monaco: `python src\step2c_season.py --rounds 6 --refresh --cache-dir C:\f1cache`.
+Source for the map: the FIA "Power Unit Information" document published for every event (it also lists
+the maximum recharge per lap and the full-power sectors, which vary by track).
+
+Monaco re-run with the Rev 1 map: effective drag 2.14 -> 1.20 (season median ~1.1). Remaining dry
+outliers: Singapore 1.67, Silverstone 1.56, Zandvoort 1.46 - to check against their FIA PU documents.
+
+### Track evolution in qualifying
+The track gets faster through qualifying, so a team knocked out in Q1 set its best lap on a slower
+track than a team in Q3. Step 2d now fits, per round, lap_time = driver effect + slope x session time on
+each driver's push laps (within 2% of their best) and corrects every lap to the track at the end of the
+session. `pace_gap_%` is the corrected quali pace; `pace_gap_raw_%` is kept for comparison. Fits are in
+`outputs/development/track_evolution.csv`.
+- Check on synthetic sessions with -0.30 s per 10 min built in: recovered -0.30 s per 10 min in every
+  round; the corrected pace had ~9x smaller standard errors than the raw pace.
+- The slope also contains drivers pushing harder later in the session - also not car pace.
+
+Track-evolution findings (20 dry qualifying sessions):
+- The track gains a median 0.21 s per 10 minutes of qualifying, about 1.2 s over a whole session.
+- Miami package, qualifying pace: -0.53% corrected (t -6.6, no placebo as big) vs -0.68% uncorrected.
+  About a fifth of Red Bull's apparent qualifying gain came from reaching later sessions on a faster
+  track; the rest is the car. Race pace (no track-evolution issue) stays -0.88%.

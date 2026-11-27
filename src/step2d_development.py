@@ -49,7 +49,8 @@ PU_SUPPLIERS = {
     "Audi": ["audi", "sauber", "kick"],
 }
 METRICS = {
-    "pace_gap_%": "qualifying pace vs median team (%) - higher = slower",
+    "pace_gap_%": "qualifying pace vs median team (%), track evolution corrected - higher = slower",
+    "pace_gap_raw_%": "same, NOT corrected for track evolution (for comparison)",
     "race_pace_%": "race pace vs median team (%), fuel + tyre corrected - higher = slower",
     "cda_hi": "effective drag (CdA, upper bound) - higher = more drag OR weaker engine",
     "electric_mj_mid": "electrical energy deployed per quali lap (MJ)",
@@ -77,7 +78,7 @@ def load_panel():
     # Step 2e conditions (if saved): drop wet laps, and drag from wet qualifying sessions
     cond = conditions("Q")
     if not cond.empty:
-        keep = ["round", "driver", "lap_number", "wet"] + (["deleted"] if "deleted" in cond else [])
+        keep = ["round", "driver", "lap_number", "wet"] + [c for c in ("deleted", "session_time_s") if c in cond]
         q = q.merge(cond[keep], on=["round", "driver", "lap_number"], how="left")
         share = q.groupby("round")["wet"].mean()
         wet_rounds = sorted(share[share > 0.3].index)
@@ -90,12 +91,23 @@ def load_panel():
         print(f"Conditions (Step 2e): dropped {n_wet} wet and {n_del} deleted quali laps; "
               f"drag ignored for wet qualifying in rounds {wet_rounds if wet_rounds else 'none'}")
 
+    # Track evolution: the track gets faster during qualifying (rubber, temperature), so a team knocked
+    # out in Q1 set its best lap on a slower track than a team in Q3. Correct every lap to the
+    # track at the END of the session (needs the lap start times from Step 2e).
+    q["lap_time_raw_s"] = q["lap_time_s"]
+    if "session_time_s" in q and q["session_time_s"].notna().mean() > 0.5:
+        q, evo = track_evolution(q)
+        DEV_DIR.mkdir(parents=True, exist_ok=True)
+        evo.to_csv(DEV_DIR / "track_evolution.csv", index=False)
+        print(f"Track evolution (Step 2e lap times): median {evo['s_per_10min'].median():+.3f} s per 10 min of qualifying;"
+              f" over a whole session {evo['whole_session_s'].median():+.2f} s (median of {len(evo)} rounds)")
+
     # Pace vs the MEDIAN team at each round (not pole: if the fastest team slows down, every other
     # team's gap to pole shrinks and they would all look like they improved)
-    best = q.groupby(["round", "event", "team"])["lap_time_s"].min().reset_index()
-    med = best.groupby("round")["lap_time_s"].median().rename("median_team")
-    best = best.join(med, on="round")
-    best["pace_gap_%"] = (best["lap_time_s"] / best["median_team"] - 1) * 100
+    best = q.groupby(["round", "event", "team"])[["lap_time_s", "lap_time_raw_s"]].min().reset_index()
+    for col, out in [("lap_time_s", "pace_gap_%"), ("lap_time_raw_s", "pace_gap_raw_%")]:
+        med = best.groupby("round")[col].transform("median")
+        best[out] = (best[col] / med - 1) * 100
     habits = q.groupby(["round", "team"])[["electric_mj_mid", "super_clip_robust", "lift_coast_%"]].mean()
     dr = drag.groupby(["round", "team"])[["cda_hi", "cda_lo"]].mean()
     panel = best.set_index(["round", "team"]).join(habits).join(dr)
@@ -116,6 +128,40 @@ DRY = {"SOFT", "MEDIUM", "HARD"}
 MIN_TEAM_LAPS = 15                       # a team needs this many clean laps in a race to get a race pace
 FUEL_S_PER_KG_RANGE = (0.015, 0.06)      # plausible fuel effect per kg for a ~90 s lap (scaled by lap length)
 FUEL_S_PER_KG_DEFAULT = 0.03
+
+
+PUSH_LAP_WINDOW = 1.02     # laps within 2% of the driver's best lap of the session = push laps
+
+
+def track_evolution(q):
+    """Fit how fast the track improves during each qualifying session and correct lap times to the end
+    of the session.
+
+    Within each round: lap_time = driver effect + slope * session_time, using each driver's push laps
+    (driver effects make sure it's the SAME driver getting faster, not faster drivers running later).
+    The slope also includes drivers pushing harder in Q3 - that isn't car pace either.
+    """
+    rows, parts = [], []
+    for rnd, g in q.groupby("round"):
+        g = g.copy()
+        t = g["session_time_s"].astype(float)
+        push = g["lap_time_s"] <= g.groupby("driver")["lap_time_s"].transform("min") * PUSH_LAP_WINDOW
+        d = g[push & t.notna()]
+        x = d["session_time_s"] - d.groupby("driver")["session_time_s"].transform("mean")
+        y = d["lap_time_s"] - d.groupby("driver")["lap_time_s"].transform("mean")
+        if len(d) < 20 or (x ** 2).sum() <= 0:
+            parts.append(g)
+            continue
+        slope = float((x * y).sum() / (x ** 2).sum())                       # s of lap time per s of session
+        resid = y - slope * x
+        se = float(np.sqrt((resid ** 2).sum() / max(len(d) - d["driver"].nunique() - 1, 1) / (x ** 2).sum()))
+        t_end = float(t.max())
+        g["lap_time_s"] = g["lap_time_s"] - slope * (t.fillna(t_end) - t_end)
+        span = t_end - float(t.min())
+        rows.append({"round": rnd, "s_per_10min": slope * 600, "t": slope / se if se > 0 else np.nan,
+                     "session_span_min": span / 60, "whole_session_s": slope * span, "push_laps": len(d)})
+        parts.append(g)
+    return pd.concat(parts, ignore_index=True), pd.DataFrame(rows).round(3)
 
 
 def conditions(kind):

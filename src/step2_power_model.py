@@ -81,14 +81,39 @@ REASON_COLOURS = {
 }
 
 
+# Event-specific MGU-K maps. The FIA publishes the map for every event ("Power Unit Information").
+# Monaco 2026 used "Rev 1": full 350 kW only up to 200 km/h, then a linear taper to zero at 300 km/h
+# (and straight-line aero mode was not allowed at all).
+DEPLOYMENT_MAPS = {"standard": "1800 - 5v below 340 km/h, 0 above 345 km/h",
+                   "rev1": "350 kW up to 200 km/h, linear to 0 at 300 km/h"}
+EVENT_MAPS = {"monaco": "rev1"}
+_ACTIVE_MAP = "standard"
+
+
+def map_for_event(event_name):
+    name = str(event_name).lower()
+    return next((m for key, m in EVENT_MAPS.items() if key in name), "standard")
+
+
+def set_deployment_map(name):
+    """Choose the MGU-K speed map used by deployment_cap_kw (see DEPLOYMENT_MAPS)."""
+    global _ACTIVE_MAP
+    if name not in DEPLOYMENT_MAPS:
+        raise ValueError(f"unknown map {name}; options: {list(DEPLOYMENT_MAPS)}")
+    _ACTIVE_MAP = name
+
+
 def deployment_cap_kw(speed_kmh):
     """Max MGU-K deployment allowed at a given speed (overtake mode OFF).
 
     2026 rule: 1800 - 5*v below 340 km/h (capped at 350 kW),
                6900 - 20*v between 340-345 km/h, zero above 345 km/h.
     Below ~290 km/h this is simply the full 350 kW.
+    Monaco ('rev1' map): 350 kW to 200 km/h, then down to 0 at 300 km/h.
     """
     v = np.asarray(speed_kmh, dtype=float)
+    if _ACTIVE_MAP == "rev1":
+        return np.clip(MGU_K_MAX_KW - 3.5 * (v - 200), 0, MGU_K_MAX_KW)
     cap = np.minimum(MGU_K_MAX_KW, 1800 - 5 * v)
     cap = np.where(v >= 340, 6900 - 20 * v, cap)
     cap = np.where(v >= 345, 0, cap)

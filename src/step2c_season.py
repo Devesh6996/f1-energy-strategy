@@ -190,6 +190,10 @@ def process_event(year, rnd, name, refresh):
         print(f"Round {rnd:2d} {name}: already done (use --refresh to redo)")
         return
 
+    s2.set_deployment_map(s2.map_for_event(name))
+    if s2.map_for_event(name) != "standard":
+        print(f"Round {rnd:2d} {name}: using the '{s2.map_for_event(name)}' MGU-K map "
+              f"({s2.DEPLOYMENT_MAPS[s2.map_for_event(name)]})")
     print(f"\nRound {rnd:2d} {name}: qualifying...", flush=True)
     q = load(year, rnd, "Q")
     rho = air_density(q)
